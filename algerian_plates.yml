@@ -1,0 +1,8 @@
+max_plate_slots: 11  # Max 11 chiffres, adaptÃ© Ã  "11976311616"
+alphabet: '0123456789 '  # Ajoute le caractÃ¨re de padding '_' Ã  l'alphabet
+pad_char: ' '  # UtilisÃ© pour combler les plaques plus courtes
+img_height: 64
+img_width: 128
+keep_aspect_ratio: false
+interpolation: linear
+image_color_mode: grayscale  # Change Ã  'rgb' si tes images sont en couleur
