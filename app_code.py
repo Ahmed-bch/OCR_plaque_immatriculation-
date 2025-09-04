@@ -210,9 +210,9 @@ logger = logging.getLogger(__name__)
 
 # Configuration des chemins (à adapter selon votre environnement)
 CONFIG = {
-    "yolo_model_path": "runs/detect/train6/weights/best.pt",
-    "onnx_model_path": "C:/export_test/last.onnx",
-    "plate_config_path": "config/algerian_plates.yml",
+    "yolo_model_path": "best.pt",
+    "onnx_model_path": "last.onnx",
+    "plate_config_path": "algerian_plates.yml",
     "confidence_threshold": 0.5,
     "max_video_size_mb": 100,  # Limite de taille vidéo en MB
 }
