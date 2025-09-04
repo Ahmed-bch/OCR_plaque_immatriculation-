@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 import json
 from difflib import SequenceMatcher
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, VideoFrame
 
 # ===============================
 # Constantes pour les plaques algériennes
@@ -25,7 +26,7 @@ WILAYAS = {
     "13": "Tlemcen", "14": "Tiaret", "15": "Tizi Ouzou", "16": "Alger",
     "17": "Djelfa", "18": "Jijel", "19": "Sétif", "20": "Saïda",
     "21": "Skikda", "22": "Sidi Bel Abbès", "23": "Annaba", "24": "Guelma",
-    "25": "Constantine", "26": "Médéa", "27": "Mostaganem", "28": "M'Sila",
+    "25": "Constantine", "26": "Médéa", "27": "Mostaganem", "28": "M\u2019Sila",
     "29": "Mascara", "30": "Ouargla", "31": "Oran", "32": "El Bayadh",
     "33": "Illizi", "34": "Bordj Bou Arréridj", "35": "Boumerdès", "36": "El Tarf",
     "37": "Tindouf", "38": "Tissemsilt", "39": "El Oued", "40": "Khenchela",
@@ -33,7 +34,7 @@ WILAYAS = {
     "45": "Naama", "46": "Aïn Témouchent", "47": "Ghardaïa", "48": "Relizane",
     "49": "Timimoun", "50": "Bordj Badji Mokhtar", "51": "Ouled Djellal",
     "52": "Béni Abbès", "53": "In Salah", "54": "In Guezzam", "55": "Touggourt",
-    "56": "Djanet", "57": "El M'Ghair", "58": "El Menia"
+    "56": "Djanet", "57": "El M\u2019Ghair", "58": "El Menia"
 }
 
 VEHICLE_CATEGORIES = {
@@ -147,13 +148,13 @@ def deduplicate_plates(detections, similarity_threshold=0.8):
     groups = []
     
     for detection in detections:
-        plate_text = detection['text']
+        plate_text = detection["text"]
         added_to_group = False
         
         # Chercher un groupe existant avec une plaque similaire
         for group in groups:
             for existing_detection in group:
-                if similarity(plate_text, existing_detection['text']) >= similarity_threshold:
+                if similarity(plate_text, existing_detection["text"]) >= similarity_threshold:
                     group.append(detection)
                     added_to_group = True
                     break
@@ -173,17 +174,17 @@ def deduplicate_plates(detections, similarity_threshold=0.8):
         # 2. Confiance la plus élevée
         # 3. Longueur de texte appropriée (10 ou 11 caractères)
         
-        valid_detections = [d for d in group if d['parsed_info']['is_valid']]
+        valid_detections = [d for d in group if d["parsed_info"]["is_valid"]]
         
         if valid_detections:
             # Prendre la détection valide avec la plus haute confiance
-            best_detection = max(valid_detections, key=lambda x: x['confidence'])
+            best_detection = max(valid_detections, key=lambda x: x["confidence"])
         else:
             # Si aucune détection valide, prendre celle avec la plus haute confiance
             # et la longueur la plus proche de 10-11 caractères
             def score_detection(d):
-                conf_score = d['confidence']
-                length_score = 1.0 if len(d['text']) in [10, 11] else 0.5
+                conf_score = d["confidence"]
+                length_score = 1.0 if len(d["text"]) in [10, 11] else 0.5
                 return conf_score * length_score
             
             best_detection = max(group, key=score_detection)
@@ -237,8 +238,29 @@ def load_models():
         st.error(f"❌ Erreur lors du chargement des modèles: {e}")
         return None, None
 
+class PlateDetectionProcessor(VideoProcessorBase):
+    def __init__(self, yolo_model, plate_recognizer, confidence_threshold):
+        self.yolo_model = yolo_model
+        self.plate_recognizer = plate_recognizer
+        self.confidence_threshold = confidence_threshold
+        self.all_detections_in_session = [] # Pour stocker toutes les détections du flux
+
+    def recv(self, frame: VideoFrame) -> VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+
+        processed_img, detections = process_detection(
+            img.copy(), self.yolo_model, self.plate_recognizer, self.confidence_threshold
+        )
+        
+        # Sauvegarder les détections pour traitement ultérieur (déduplication)
+        if detections:
+            self.all_detections_in_session.extend(detections)
+            # Note: save_results est appelée après l'arrêt du streamer pour la déduplication
+
+        return VideoFrame.from_ndarray(processed_img, format="bgr24")
+
 def process_detection(frame, yolo_model, plate_recognizer, confidence_threshold):
-    """Traiter la détection sur une image"""
+    """Traiter la détection sur une image (utilisé par tous les modes)"""
     detections = []
     
     try:
@@ -541,7 +563,7 @@ def main():
                                         formatted_text = f"{detection['parsed_info']['serial_number']} {detection['parsed_info']['category']}{detection['parsed_info']['year']} {detection['parsed_info']['wilaya']}"
                                         st.write(f"**Matricule:** {formatted_text}")
                                         st.write(f"**Numéro de série:** {detection['parsed_info']['serial_number']}")
-                                        st.write(f"**Catégorie:** {get_vehicle_category_name(detection['parsed_info']['category'])} ({detection['parsed_info']['category']})")
+                                        st.write(f"**Catégorie de véhicule:** {get_vehicle_category_name(detection['parsed_info']['category'])} ({detection['parsed_info']['category']})")
                                         st.write(f"**Année:** 20{detection['parsed_info']['year']}")
                                         st.write(f"**Wilaya:** {get_wilaya_name(detection['parsed_info']['wilaya'])} ({detection['parsed_info']['wilaya']})")
                                     else:
@@ -573,56 +595,53 @@ def main():
     elif mode == "📹 Temps réel (webcam)":
         st.header("📹 Détection en temps réel")
         
-        col1, col2 = st.columns([3, 1])
-        
-        with col2:
-            run = st.checkbox("▶️ Démarrer la webcam")
-            show_fps = st.checkbox("📊 Afficher FPS", value=True)
-            
-        with col1:
-            stframe = st.empty()
-        
-        if run:
-            cap = cv2.VideoCapture(0)
-            
-            if not cap.isOpened():
-                st.error("❌ Impossible d'accéder à la webcam")
-                return
-            
-            # Variables pour le FPS
-            fps_counter = 0
-            start_time = time.time()
-            
-            while run:
-                ret, frame = cap.read()
-                if not ret:
-                    st.error("❌ Impossible de lire le flux de la webcam")
-                    break
-                
-                # Traitement
-                processed_frame, detections = process_detection(
-                    frame.copy(), yolo_model, plate_recognizer, confidence_threshold
-                )
-                
-                # Calcul du FPS
-                if show_fps:
-                    fps_counter += 1
-                    elapsed = time.time() - start_time
-                    if elapsed >= 1.0:
-                        fps = fps_counter / elapsed
-                        cv2.putText(processed_frame, f"FPS: {fps:.1f}", (10, 30),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                        fps_counter = 0
-                        start_time = time.time()
-                
-                stframe.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB), channels="RGB")
-                
-                # Sauvegarder les détections
-                if detections:
-                    save_results(detections, "webcam")
-            
-            cap.release()
-    
+        # Utilisation de streamlit-webrtc
+        webrtc_ctx = webrtc_streamer(
+            key="plate_detection",
+            video_processor_factory=lambda: PlateDetectionProcessor(yolo_model, plate_recognizer, confidence_threshold),
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            },
+            media_stream_constraints={
+                "video": True,
+                "audio": False
+            },
+            async_processing=True,
+        )
+
+        if webrtc_ctx.state.playing:
+            st.write("Webcam en cours...")
+            # Récupérer les détections du processeur après l'arrêt du flux
+            if webrtc_ctx.video_processor:
+                all_detections_from_webcam = webrtc_ctx.video_processor.all_detections_in_session
+                if all_detections_from_webcam:
+                    st.success(f"✅ Traitement terminé! {len(all_detections_from_webcam)} détections au total")
+                    unique_detections = deduplicate_plates(all_detections_from_webcam)
+                    st.info(f"🔍 Après déduplication: {len(unique_detections)} plaques uniques détectées")
+                    for i, detection in enumerate(unique_detections, 1):
+                        with st.expander(f"🚗 Véhicule {i}"):
+                            col_info, col_crop = st.columns([2, 1])
+                            with col_info:
+                                if detection['parsed_info']['is_valid']:
+                                    formatted_text = f"{detection['parsed_info']['serial_number']} {detection['parsed_info']['category']}{detection['parsed_info']['year']} {detection['parsed_info']['wilaya']}"
+                                    st.write(f"**Matricule:** {formatted_text}")
+                                    st.write(f"**Numéro de série:** {detection['parsed_info']['serial_number']}")
+                                    st.write(f"**Catégorie de véhicule:** {get_vehicle_category_name(detection['parsed_info']['category'])} ({detection['parsed_info']['category']})")
+                                    st.write(f"**Année:** 20{detection['parsed_info']['year']}")
+                                    st.write(f"**Wilaya:** {get_wilaya_name(detection['parsed_info']['wilaya'])} ({detection['parsed_info']['wilaya']})")
+                                else:
+                                    st.write(f"**Matricule (brut):** {detection['text']}")
+                                    st.error(f"❌ Format invalide: {detection['parsed_info']['error']}")
+                                st.write(f"**Confiance:** {detection['confidence']:.2f}")
+                                similar_count = sum(1 for d in all_detections_from_webcam 
+                                                  if similarity(d['text'], detection['text']) >= 0.8)
+                                st.write(f"**Détections similaires:** {similar_count} fois")
+                            with col_crop:
+                                st.image(cv2.cvtColor(detection['cropped_image'], cv2.COLOR_BGR2RGB))
+                    save_results(unique_detections, "webcam")
+                else:
+                    st.warning("⚠️ Aucune plaque détectée via la webcam.")
+
     # ===============================
     # HISTORIQUE DES DÉTECTIONS
     # ===============================
@@ -682,4 +701,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
