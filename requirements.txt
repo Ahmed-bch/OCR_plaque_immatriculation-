@@ -1,0 +1,7 @@
+streamlit
+opencv-python
+numpy
+pandas
+ultralytics
+fast-plate-ocr
+python-Levenshtein
