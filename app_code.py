@@ -254,7 +254,7 @@ if WEBRTC_AVAILABLE:
             self.confidence_threshold = confidence_threshold
             self.all_detections_in_session = [] # Pour stocker toutes les détections du flux
 
-        def recv(self, frame: VideoFrame) -> VideoFrame:
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
             img = frame.to_ndarray(format="bgr24")
 
             processed_img, detections = process_detection(
@@ -266,7 +266,7 @@ if WEBRTC_AVAILABLE:
                 self.all_detections_in_session.extend(detections)
                 # Note: save_results est appelée après l'arrêt du streamer pour la déduplication
 
-            return VideoFrame.from_ndarray(processed_img, format="bgr24")
+            return av.VideoFrame.from_ndarray(processed_img, format="bgr24")
 
 def process_detection(frame, yolo_model, plate_recognizer, confidence_threshold):
     """Traiter la détection sur une image (utilisé par tous les modes)"""
