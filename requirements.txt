@@ -11,3 +11,4 @@ onnxslim ==0.1.65
 tf2onnx==1.16.1
 fast-plate-ocr[onnx]
 streamlit-webrtc
+av
