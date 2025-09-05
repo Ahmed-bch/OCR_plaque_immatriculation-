@@ -13,7 +13,14 @@ import logging
 from pathlib import Path
 import json
 from difflib import SequenceMatcher
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, VideoFrame
+
+# Tentative d'importation de streamlit_webrtc avec gestion d'erreur
+try:
+    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, VideoFrame
+    WEBRTC_AVAILABLE = True
+except ImportError:
+    WEBRTC_AVAILABLE = False
+    st.warning("⚠️ streamlit-webrtc n'est pas disponible. La détection en temps réel sera désactivée.")
 
 # ===============================
 # Constantes pour les plaques algériennes
@@ -238,26 +245,28 @@ def load_models():
         st.error(f"❌ Erreur lors du chargement des modèles: {e}")
         return None, None
 
-class PlateDetectionProcessor(VideoProcessorBase):
-    def __init__(self, yolo_model, plate_recognizer, confidence_threshold):
-        self.yolo_model = yolo_model
-        self.plate_recognizer = plate_recognizer
-        self.confidence_threshold = confidence_threshold
-        self.all_detections_in_session = [] # Pour stocker toutes les détections du flux
+# Classe pour le traitement vidéo en temps réel (seulement si webrtc est disponible)
+if WEBRTC_AVAILABLE:
+    class PlateDetectionProcessor(VideoProcessorBase):
+        def __init__(self, yolo_model, plate_recognizer, confidence_threshold):
+            self.yolo_model = yolo_model
+            self.plate_recognizer = plate_recognizer
+            self.confidence_threshold = confidence_threshold
+            self.all_detections_in_session = [] # Pour stocker toutes les détections du flux
 
-    def recv(self, frame: VideoFrame) -> VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
+        def recv(self, frame: VideoFrame) -> VideoFrame:
+            img = frame.to_ndarray(format="bgr24")
 
-        processed_img, detections = process_detection(
-            img.copy(), self.yolo_model, self.plate_recognizer, self.confidence_threshold
-        )
-        
-        # Sauvegarder les détections pour traitement ultérieur (déduplication)
-        if detections:
-            self.all_detections_in_session.extend(detections)
-            # Note: save_results est appelée après l'arrêt du streamer pour la déduplication
+            processed_img, detections = process_detection(
+                img.copy(), self.yolo_model, self.plate_recognizer, self.confidence_threshold
+            )
+            
+            # Sauvegarder les détections pour traitement ultérieur (déduplication)
+            if detections:
+                self.all_detections_in_session.extend(detections)
+                # Note: save_results est appelée après l'arrêt du streamer pour la déduplication
 
-        return VideoFrame.from_ndarray(processed_img, format="bgr24")
+            return VideoFrame.from_ndarray(processed_img, format="bgr24")
 
 def process_detection(frame, yolo_model, plate_recognizer, confidence_threshold):
     """Traiter la détection sur une image (utilisé par tous les modes)"""
@@ -391,10 +400,16 @@ def main():
     
     st.success("✅ Modèles chargés avec succès!")
     
-    # Choix du mode
+    # Choix du mode (conditionnel pour la webcam)
+    if WEBRTC_AVAILABLE:
+        mode_options = ["🖼️ Image", "🎥 Vidéo (upload)", "📹 Temps réel (webcam)"]
+    else:
+        mode_options = ["🖼️ Image", "🎥 Vidéo (upload)"]
+        st.info("ℹ️ Le mode temps réel nécessite l'installation de streamlit-webrtc")
+    
     mode = st.radio(
         "📋 Choisir un mode :", 
-        ["🖼️ Image", "🎥 Vidéo (upload)", "📹 Temps réel (webcam)"],
+        mode_options,
         horizontal=True
     )
     
@@ -590,9 +605,9 @@ def main():
                     st.error(f"❌ Erreur lors du traitement de la vidéo: {e}")
     
     # ===============================
-    # MODE TEMPS RÉEL
+    # MODE TEMPS RÉEL (seulement si webrtc disponible)
     # ===============================
-    elif mode == "📹 Temps réel (webcam)":
+    elif mode == "📹 Temps réel (webcam)" and WEBRTC_AVAILABLE:
         st.header("📹 Détection en temps réel")
         
         # Utilisation de streamlit-webrtc
@@ -610,14 +625,17 @@ def main():
         )
 
         if webrtc_ctx.state.playing:
-            st.write("Webcam en cours...")
+            st.write("📹 Webcam en cours...")
+            st.info("Appuyez sur 'STOP' pour arrêter et voir les résultats")
+        elif webrtc_ctx.state.stopped:
             # Récupérer les détections du processeur après l'arrêt du flux
-            if webrtc_ctx.video_processor:
+            if webrtc_ctx.video_processor and hasattr(webrtc_ctx.video_processor, 'all_detections_in_session'):
                 all_detections_from_webcam = webrtc_ctx.video_processor.all_detections_in_session
                 if all_detections_from_webcam:
-                    st.success(f"✅ Traitement terminé! {len(all_detections_from_webcam)} détections au total")
+                    st.success(f"✅ Session terminée! {len(all_detections_from_webcam)} détections au total")
                     unique_detections = deduplicate_plates(all_detections_from_webcam)
                     st.info(f"🔍 Après déduplication: {len(unique_detections)} plaques uniques détectées")
+                    
                     for i, detection in enumerate(unique_detections, 1):
                         with st.expander(f"🚗 Véhicule {i}"):
                             col_info, col_crop = st.columns([2, 1])
@@ -638,9 +656,10 @@ def main():
                                 st.write(f"**Détections similaires:** {similar_count} fois")
                             with col_crop:
                                 st.image(cv2.cvtColor(detection['cropped_image'], cv2.COLOR_BGR2RGB))
+                    
                     save_results(unique_detections, "webcam")
                 else:
-                    st.warning("⚠️ Aucune plaque détectée via la webcam.")
+                    st.info("ℹ️ Aucune plaque détectée via la webcam.")
 
     # ===============================
     # HISTORIQUE DES DÉTECTIONS
@@ -699,7 +718,90 @@ def main():
             mime="text/csv",
         )
 
+# ===============================
+# MÉTHODES ALTERNATIVES POUR LA WEBCAM
+# ===============================
+
+def alternative_webcam_method():
+    """Méthode alternative utilisant OpenCV pour la webcam (sans streamlit-webrtc)"""
+    st.header("📹 Détection en temps réel (méthode alternative)")
+    st.warning("⚠️ Cette méthode utilise OpenCV directement. Fermez la fenêtre OpenCV pour revenir à Streamlit.")
+    
+    if st.button("🚀 Lancer la détection webcam"):
+        with st.spinner("🔄 Chargement des modèles..."):
+            yolo_model, plate_recognizer = load_models()
+        
+        if yolo_model is None or plate_recognizer is None:
+            return
+        
+        confidence_threshold = st.sidebar.slider(
+            "Seuil de confiance", 
+            min_value=0.1, 
+            max_value=1.0, 
+            value=0.5, 
+            step=0.05
+        )
+        
+        cap = cv2.VideoCapture(0)
+        
+        if not cap.isOpened():
+            st.error("❌ Impossible d'accéder à la webcam")
+            return
+        
+        st.info("📹 Webcam lancée! Appuyez sur 'q' dans la fenêtre OpenCV pour arrêter.")
+        all_detections = []
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            processed_frame, detections = process_detection(
+                frame.copy(), yolo_model, plate_recognizer, confidence_threshold
+            )
+            
+            if detections:
+                all_detections.extend(detections)
+            
+            cv2.imshow('Détection de plaques', processed_frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        
+        cap.release()
+        cv2.destroyAllWindows()
+        
+        # Traiter les résultats
+        if all_detections:
+            unique_detections = deduplicate_plates(all_detections)
+            st.success(f"✅ Session terminée! {len(unique_detections)} plaques uniques détectées")
+            
+            for i, detection in enumerate(unique_detections, 1):
+                with st.expander(f"🚗 Véhicule {i}"):
+                    col_info, col_crop = st.columns([2, 1])
+                    with col_info:
+                        if detection['parsed_info']['is_valid']:
+                            formatted_text = f"{detection['parsed_info']['serial_number']} {detection['parsed_info']['category']}{detection['parsed_info']['year']} {detection['parsed_info']['wilaya']}"
+                            st.write(f"**Matricule:** {formatted_text}")
+                            st.write(f"**Numéro de série:** {detection['parsed_info']['serial_number']}")
+                            st.write(f"**Catégorie de véhicule:** {get_vehicle_category_name(detection['parsed_info']['category'])} ({detection['parsed_info']['category']})")
+                            st.write(f"**Année:** 20{detection['parsed_info']['year']}")
+                            st.write(f"**Wilaya:** {get_wilaya_name(detection['parsed_info']['wilaya'])} ({detection['parsed_info']['wilaya']})")
+                        else:
+                            st.write(f"**Matricule (brut):** {detection['text']}")
+                            st.error(f"❌ Format invalide: {detection['parsed_info']['error']}")
+                        st.write(f"**Confiance:** {detection['confidence']:.2f}")
+                    with col_crop:
+                        st.image(cv2.cvtColor(detection['cropped_image'], cv2.COLOR_BGR2RGB))
+            
+            save_results(unique_detections, "webcam_alternative")
+        else:
+            st.info("ℹ️ Aucune plaque détectée.")
+
+# Ajouter la méthode alternative si webrtc n'est pas disponible
+if not WEBRTC_AVAILABLE:
+    st.markdown("---")
+    alternative_webcam_method()
+
 if __name__ == "__main__":
     main()
-
-
