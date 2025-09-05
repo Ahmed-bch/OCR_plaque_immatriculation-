@@ -14,13 +14,12 @@ from pathlib import Path
 import json
 from difflib import SequenceMatcher
 
-# Tentative d'importation de streamlit_webrtc avec gestion d'erreur
 try:
-    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, VideoFrame
-    WEBRTC_AVAILABLE = True
-except ImportError:
-    WEBRTC_AVAILABLE = False
-    st.warning("⚠️ streamlit-webrtc n'est pas disponible. La détection en temps réel sera désactivée.")
+    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+    import av
+    print("✅ streamlit-webrtc fonctionne!")
+except ImportError as e:
+    print(f"❌ Erreur: {e}")
 
 # ===============================
 # Constantes pour les plaques algériennes
