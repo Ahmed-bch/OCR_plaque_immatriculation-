@@ -798,8 +798,79 @@ def alternative_webcam_method():
         else:
             st.info("ℹ️ Aucune plaque détectée.")
 
-# Ajouter la méthode alternative si webrtc n'est pas disponible
+# Ajouter la méthode camera_input si webrtc n'est pas disponible
+def camera_input_method():
+    """Méthode utilisant st.camera_input pour capturer des photos"""
+    st.header("📸 Capture photo avec webcam")
+    st.info("ℹ️ Prenez une photo avec votre webcam pour analyser les plaques")
+    
+    # Capture d'image
+    picture = st.camera_input("📷 Prenez une photo")
+    
+    if picture:
+        # Convertir l'image
+        file_bytes = np.asarray(bytearray(picture.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
+        if frame is not None:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Photo prise")
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+            with st.spinner("🔍 Analyse en cours..."):
+                yolo_model, plate_recognizer = load_models()
+                if yolo_model and plate_recognizer:
+                    confidence_threshold = st.sidebar.slider(
+                        "Seuil de confiance", 
+                        min_value=0.1, 
+                        max_value=1.0, 
+                        value=0.5, 
+                        step=0.05,
+                        key="camera_confidence"
+                    )
+                    
+                    processed_frame, detections = process_detection(
+                        frame.copy(), yolo_model, plate_recognizer, confidence_threshold
+                    )
+                    
+                    with col2:
+                        st.subheader("Résultat")
+                        st.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB))
+                    
+                    if detections:
+                        st.success(f"✅ {len(detections)} plaque(s) détectée(s)!")
+                        
+                        for i, detection in enumerate(detections):
+                            expander_title = f"Plaque {i+1}: "
+                            if detection['parsed_info']['is_valid']:
+                                expander_title += f"{detection['parsed_info']['serial_number']} {detection['parsed_info']['category']}{detection['parsed_info']['year']} {detection['parsed_info']['wilaya']}"
+                            else:
+                                expander_title += detection['text']
+
+                            with st.expander(expander_title):
+                                col_info, col_crop = st.columns([2, 1])
+                                with col_info:
+                                    st.write(f"**Texte OCR brut:** {detection['text']}")
+                                    if detection['parsed_info']['is_valid']:
+                                        st.write(f"**Numéro de série:** {detection['parsed_info']['serial_number']}")
+                                        st.write(f"**Catégorie de véhicule:** {get_vehicle_category_name(detection['parsed_info']['category'])} ({detection['parsed_info']['category']})")
+                                        st.write(f"**Année:** 20{detection['parsed_info']['year']}")
+                                        st.write(f"**Wilaya:** {get_wilaya_name(detection['parsed_info']['wilaya'])} ({detection['parsed_info']['wilaya']})")
+                                    else:
+                                        st.error(f"❌ Format de plaque invalide: {detection['parsed_info']['error']}")
+                                    st.write(f"**Confiance:** {detection['confidence']:.2f}")
+                                with col_crop:
+                                    st.image(cv2.cvtColor(detection['cropped_image'], cv2.COLOR_BGR2RGB))
+                        
+                        save_results(detections, "camera")
+                    else:
+                        st.warning("⚠️ Aucune plaque détectée")
+
 if not WEBRTC_AVAILABLE:
+    st.markdown("---")
+    camera_input_method()
     st.markdown("---")
     alternative_webcam_method()
 
